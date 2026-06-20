@@ -103,7 +103,6 @@ export default class OpenWindow extends Component<Props, State> {
           key={this.state.webViewKey}
           source={{ html: HTML }}
           automaticallyAdjustContentInsets={false}
-          useWebView2
           onOpenWindow={onOpenWindow}
         />
         <Text style={styles.text}>{this.state.text}</Text>

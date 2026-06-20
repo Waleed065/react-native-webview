@@ -5,8 +5,6 @@
 
 #include "pch.h"
 
-#ifdef RNW_NEW_ARCH
-
 #include "codegen_manual/react/components/RNCWebViewSpec/RCTWebView2.g.h"
 
 #include <winrt/Microsoft.ReactNative.h>
@@ -16,12 +14,6 @@
 #include <winrt/Microsoft.Web.WebView2.Core.h>
 
 namespace winrt::ReactNativeWebView::implementation {
-
-// State to store the WebView2 size
-struct RCTWebView2StateData : winrt::implements<RCTWebView2StateData, winrt::IInspectable> {
-    RCTWebView2StateData(winrt::Windows::Foundation::Size ds) : desiredSize(ds) {}
-    winrt::Windows::Foundation::Size desiredSize;
-};
 
 struct RCTWebView2ComponentView : winrt::implements<RCTWebView2ComponentView, winrt::IInspectable>,
                                    RNCWebViewCodegen::BaseRCTWebView2<RCTWebView2ComponentView> {
@@ -33,10 +25,6 @@ struct RCTWebView2ComponentView : winrt::implements<RCTWebView2ComponentView, wi
         const winrt::Microsoft::ReactNative::ComponentView &view,
         const winrt::com_ptr<RNCWebViewCodegen::RCTWebView2Props> &newProps,
         const winrt::com_ptr<RNCWebViewCodegen::RCTWebView2Props> &oldProps) noexcept override;
-
-    void UpdateState(
-        const winrt::Microsoft::ReactNative::ComponentView &view,
-        const winrt::Microsoft::ReactNative::IComponentState &newState) noexcept override;
 
     void UpdateLayoutMetrics(
         const winrt::Microsoft::ReactNative::ComponentView &view,
@@ -54,8 +42,11 @@ struct RCTWebView2ComponentView : winrt::implements<RCTWebView2ComponentView, wi
     void HandleLoadUrlCommand(std::string url) noexcept override;
     void HandleClearCacheCommand(bool includeDiskFiles) noexcept override;
 
+    // Resolve a pending onShouldStartLoadWithRequest decision.
+    static void ResolvePendingNavigation(double lockIdentifier, bool shouldStart) noexcept;
+
 private:
-    void RefreshSize();
+    void NavigateToUrl(std::string const& url) noexcept;
     void RegisterEvents();
     void RegisterCoreWebView2Events();
     
@@ -77,13 +68,20 @@ private:
 
     void OnMessagePosted(winrt::hstring const& message);
     void HandleMessageFromJS(winrt::hstring const& message);
-    bool Is17763OrHigher();
     void WriteCookiesToWebView2(std::string const& cookies);
 
     winrt::weak_ref<winrt::Microsoft::ReactNative::Composition::ContentIslandComponentView> m_islandView;
     winrt::Microsoft::UI::Xaml::XamlIsland m_island{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::WebView2 m_webView{nullptr};
-    winrt::Microsoft::ReactNative::IComponentState m_state{nullptr};
+
+    // Pending onShouldStartLoadWithRequest decisions: lockIdentifier -> (weak component view, url)
+    static std::unordered_map<double, std::pair<winrt::weak_ref<RCTWebView2ComponentView>, std::string>> s_pendingNavigations;
+    static double s_nextLockIdentifier;
+
+    // URLs that have been approved by JS and should be allowed without asking again.
+    // Used to avoid re-emitting shouldStartLoadWithRequest when we retry a navigation
+    // that JS already allowed.
+    std::unordered_set<std::string> m_approvedUrls;
 
     // Event revokers
     winrt::event_token m_messageToken;
@@ -100,7 +98,6 @@ private:
     bool m_linkHandlingEnabled{true};
     winrt::hstring m_injectedJavascript{L""};
     winrt::hstring m_userAgent{L""};
-    bool m_updating{false};
     std::string m_pendingHtml{};
 };
 
@@ -108,5 +105,3 @@ void RegisterRCTWebView2ComponentView(
     winrt::Microsoft::ReactNative::IReactPackageBuilder const& packageBuilder) noexcept;
 
 } // namespace winrt::ReactNativeWebView::implementation
-
-#endif // RNW_NEW_ARCH

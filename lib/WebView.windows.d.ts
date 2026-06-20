@@ -14,10 +14,6 @@ export type { NativeProps as NativeWebViewWindows } from './RCTWebView2NativeCom
 import { WebViewSharedProps, WebViewOpenWindowEvent, WebViewNavigationEvent } from './WebViewTypes';
 export interface WindowsWebViewProps extends WebViewSharedProps {
     /**
-     * Boolean value that determines whether the web view should use the new chromium based edge webview.
-     */
-    useWebView2?: boolean;
-    /**
      * Function that is invoked when the `WebView` should open a new window.
      * @platform windows
      */

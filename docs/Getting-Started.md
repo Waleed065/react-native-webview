@@ -68,35 +68,34 @@ Add the `ReactNativeWebView` project to your solution.
 
 #### **windows/myapp/myapp.vcxproj**
 
-Add a reference to `ReactNativeWebView` to your main application project. From Visual Studio 2019:
+Add a reference to `ReactNativeWebView` to your main application project. From Visual Studio 2026:
 
 1. Right-click main application project > Add > Reference...
    Check `ReactNativeWebView` from Solution Projects.
 
-2. Modify files below to add the package providers to your main application project
+2. Let autolinking register the package provider. If you disabled autolinking, add the provider manually in your `pch.h`:
 
-#### **pch.h**
+   ```cpp
+   #include "winrt/ReactNativeWebView.h"
+   ```
 
-Add `#include "winrt/ReactNativeWebView.h"`.
+   and in your app initialization:
 
-#### **app.cpp**
+   ```cpp
+   PackageProviders().Append(winrt::ReactNativeWebView::ReactPackageProvider());
+   ```
 
-Add `PackageProviders().Append(winrt::ReactNativeWebView::ReactPackageProvider());` before `InitializeComponent();`.
+## 3. Windows WebView2 Requirements
 
-Note if you want to enable scroll with Touch for the WebView component you must disable perspective for your app using [ReactRootView.IsPerspectiveEnabled](https://microsoft.github.io/react-native-windows/docs/ReactRootView#isperspectiveenabled).
+This version of react-native-webview requires **React Native Windows C++ New Architecture (Fabric/Bridgeless)** and **WinUI 3 Desktop (Win32)**.
 
-## 3. WebView2 Support
+- Visual Studio 2026 with the v145 platform toolset
+- Windows SDK 10.0.26100.0
+- react-native-windows >= 0.82.0-preview.11
+- Microsoft.WindowsAppSDK 1.8.260209005
+- WebView2 runtime
 
-The WebView2 control is a [WinUI](https://docs.microsoft.com/windows/apps/winui/) control that renders web content using the Microsoft Edge (Chromium) rendering engine. We have added support for the WebView2 control to the react-native-webview community module in v11.18.0.
-If your app is RNW v0.68 or higher, follow these steps:
-
-i. Let autolinking handle adding the `ReactNativeWebView` project to your app.
-
-ii. Customize your app's WinUI 2.x version to version 2.8.0-prerelease.210927001 or higher. See [here](https://microsoft.github.io/react-native-windows/docs/customizing-sdk-versions) for instructions. The WinUI 2.x support for WebView2 is not yet available in "stable" releases, so for now you will need to use a prerelease version.
-
-iii. You may need to specify the `Microsoft.Web.WebView2` package in your app's `packages.config` file. If this is needed, you will get a build error listing the version of the package that you needed to specify. Simply add the package to your `packages.config`, and you should be good to go.
-
-Now you can access the WinUI WebView2 control from your app's JavaScript via the `useWebView2` prop.
+WebView2 is the only supported native webview implementation on Windows; the legacy `useWebView2` prop has been removed.
 
 ## 4. Import the webview into your component
 

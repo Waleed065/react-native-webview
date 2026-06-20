@@ -5,9 +5,6 @@
 #include "RCTWebView2ComponentView.h"
 #include "ReactWebViewHelpers.h"
 
-#ifdef RNW_NEW_ARCH
-
-#include <winrt/Windows.Foundation.Metadata.h>
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.Web.Http.h>
@@ -17,6 +14,11 @@
 #include <optional>
 
 namespace winrt::ReactNativeWebView::implementation {
+
+// Static pending-navigation state for onShouldStartLoadWithRequest.
+std::unordered_map<double, std::pair<winrt::weak_ref<RCTWebView2ComponentView>, std::string>>
+    RCTWebView2ComponentView::s_pendingNavigations;
+double RCTWebView2ComponentView::s_nextLockIdentifier{0};
 
 void RegisterRCTWebView2ComponentView(
     winrt::Microsoft::ReactNative::IReactPackageBuilder const &packageBuilder) noexcept {
@@ -39,12 +41,6 @@ void RegisterRCTWebView2ComponentView(
                     userData->InitializeContentIsland(islandView);
                     islandView.UserData(*userData);
                 });
-            
-            // Set up initial state with zero size
-            builder.as<winrt::Microsoft::ReactNative::IReactViewComponentBuilder>().SetInitialStateDataFactory(
-                [](const winrt::Microsoft::ReactNative::IComponentProps& /*props*/) noexcept {
-                    return winrt::make<RCTWebView2StateData>(winrt::Windows::Foundation::Size{0, 0});
-                });
 
             // Register the measure function - WebView fills available space
             builder.as<winrt::Microsoft::ReactNative::IReactViewComponentBuilder>().SetMeasureContentHandler(
@@ -58,19 +54,6 @@ void RegisterRCTWebView2ComponentView(
                     if (h == std::numeric_limits<float>::infinity() || h <= 0) h = 200;
                     return winrt::Windows::Foundation::Size{w, h};
                 });
-
-            // Handle state updates
-            builder.as<winrt::Microsoft::ReactNative::IReactViewComponentBuilder>().SetUpdateStateHandler(
-                [](const winrt::Microsoft::ReactNative::ComponentView& view,
-                   const winrt::Microsoft::ReactNative::IComponentState& newState) noexcept {
-                    try {
-                        auto islandView = view.as<winrt::Microsoft::ReactNative::Composition::ContentIslandComponentView>();
-                        auto userData = islandView.UserData().as<RCTWebView2ComponentView>();
-                        userData->UpdateState(view, newState);
-                    } catch (...) {
-                        // Silently handle state update failures
-                    }
-                });
         });
 }
 
@@ -81,13 +64,6 @@ void RCTWebView2ComponentView::InitializeContentIsland(
     m_webView = winrt::Microsoft::UI::Xaml::Controls::WebView2();
     m_webView.HorizontalAlignment(winrt::Microsoft::UI::Xaml::HorizontalAlignment::Stretch);
     m_webView.VerticalAlignment(winrt::Microsoft::UI::Xaml::VerticalAlignment::Stretch);
-
-    // NOTE: SizeChanged → RefreshSize → UpdateStateWithMutation loop disabled.
-    // This caused infinite recursion with sibling components (TextInput).
-    // WebView fills available space via Yoga constraints instead.
-    // m_webView.SizeChanged([this](auto const& /*sender*/, auto const& /*args*/) {
-    //     RefreshSize();
-    // });
 
     // Register WebView2 events
     RegisterEvents();
@@ -117,8 +93,6 @@ void RCTWebView2ComponentView::UpdateProps(
     if (!m_webView || !newProps) {
         return;
     }
-    
-    m_updating = true;
 
     // Apply messaging enabled
     m_messagingEnabled = newProps->messagingEnabled;
@@ -171,40 +145,6 @@ void RCTWebView2ComponentView::UpdateProps(
     if (m_webView.CoreWebView2()) {
         m_webView.CoreWebView2().Settings().IsScriptEnabled(newProps->javaScriptEnabled);
     }
-
-    m_updating = false;
-}
-
-void RCTWebView2ComponentView::RefreshSize() {
-    if (!m_webView) {
-        return;
-    }
-    
-    try {
-        m_webView.Measure(winrt::Windows::Foundation::Size{
-            std::numeric_limits<float>::infinity(),
-            std::numeric_limits<float>::infinity()
-        });
-
-        auto desiredSize = m_webView.DesiredSize();
-
-        if (m_state) {
-            auto currentState = winrt::get_self<RCTWebView2StateData>(m_state.Data());
-            if (desiredSize != currentState->desiredSize) {
-                m_state.UpdateStateWithMutation([desiredSize](winrt::Windows::Foundation::IInspectable /*data*/) {
-                    return winrt::make<RCTWebView2StateData>(desiredSize);
-                });
-            }
-        }
-    } catch (...) {
-        // RefreshSize failure is non-fatal
-    }
-}
-
-void RCTWebView2ComponentView::UpdateState(
-    const winrt::Microsoft::ReactNative::ComponentView& /*view*/,
-    const winrt::Microsoft::ReactNative::IComponentState& newState) noexcept {
-    m_state = newState;
 }
 
 void RCTWebView2ComponentView::UpdateLayoutMetrics(
@@ -266,25 +206,68 @@ void RCTWebView2ComponentView::RegisterCoreWebView2Events() {
         });
 }
 
-bool RCTWebView2ComponentView::Is17763OrHigher() {
-    static std::optional<bool> hasUniversalAPIContract_v7;
-    if (!hasUniversalAPIContract_v7.has_value()) {
-        hasUniversalAPIContract_v7 = winrt::Windows::Foundation::Metadata::ApiInformation::IsApiContractPresent(
-            L"Windows.Foundation.UniversalApiContract", 7);
-    }
-    return hasUniversalAPIContract_v7.value();
-}
-
 void RCTWebView2ComponentView::OnNavigationStarting(
-    winrt::Microsoft::Web::WebView2::Core::CoreWebView2NavigationStartingEventArgs const& /*args*/) {
+    winrt::Microsoft::Web::WebView2::Core::CoreWebView2NavigationStartingEventArgs const& args) {
     
+    std::string url;
+    try {
+        url = winrt::to_string(args.Uri().AbsoluteCanonicalUri());
+    } catch (...) {
+        // If we cannot read the URI, cancel the navigation to be safe.
+        args.Cancel(true);
+        return;
+    }
+
+    // If this URL was already approved by JS (e.g. retry after shouldStartLoadWithRequest),
+    // allow it without re-emitting the event.
+    auto approvedIt = m_approvedUrls.find(url);
+    if (approvedIt != m_approvedUrls.end()) {
+        m_approvedUrls.erase(approvedIt);
+    } else {
+        auto eventEmitter = EventEmitter();
+        if (!eventEmitter) {
+            // Event bridge isn't ready yet; we can't ask JS, so allow the navigation.
+            // Subsequent navigations will go through the normal shouldStartLoadWithRequest flow.
+        } else {
+            // Cancel the navigation and ask JS whether to proceed.
+            args.Cancel(true);
+
+            double lockIdentifier = ++s_nextLockIdentifier;
+            s_pendingNavigations[lockIdentifier] = {winrt::make_weak(*this), url};
+
+            // Defensive cap to prevent unbounded growth if JS never responds.
+            constexpr size_t maxPendingNavigations = 32;
+            if (s_pendingNavigations.size() > maxPendingNavigations) {
+                auto oldest = std::min_element(
+                    s_pendingNavigations.begin(),
+                    s_pendingNavigations.end(),
+                    [](const auto& a, const auto& b) { return a.first < b.first; });
+                if (oldest != s_pendingNavigations.end()) {
+                    s_pendingNavigations.erase(oldest);
+                }
+            }
+
+            RNCWebViewCodegen::RCTWebView2EventEmitter::OnShouldStartLoadWithRequest event;
+            event.url = url;
+            event.loading = true;
+            event.title = "";
+            event.canGoBack = m_webView ? m_webView.CanGoBack() : false;
+            event.canGoForward = m_webView ? m_webView.CanGoForward() : false;
+            event.lockIdentifier = lockIdentifier;
+            event.navigationType = "other";
+            event.isTopFrame = true;
+            eventEmitter->onShouldStartLoadWithRequest(event);
+            return;
+        }
+    }
+
+    // Emit loadingStart for navigations that are allowed to proceed.
     try {
         if (auto eventEmitter = EventEmitter()) {
             RNCWebViewCodegen::RCTWebView2EventEmitter::OnLoadingStart event;
-            if (m_webView && m_webView.Source()) {
-                event.url = winrt::to_string(m_webView.Source().AbsoluteCanonicalUri());
-            }
+            event.url = url;
             event.loading = true;
+            event.title = "";
             event.canGoBack = m_webView ? m_webView.CanGoBack() : false;
             event.canGoForward = m_webView ? m_webView.CanGoForward() : false;
             event.navigationType = "other";
@@ -324,6 +307,7 @@ void RCTWebView2ComponentView::OnNavigationCompleted(
                 event.url = winrt::to_string(m_webView.Source().AbsoluteCanonicalUri());
             }
             event.loading = false;
+            event.title = "";
             event.canGoBack = m_webView ? m_webView.CanGoBack() : false;
             event.canGoForward = m_webView ? m_webView.CanGoForward() : false;
             event.navigationType = "other";
@@ -400,6 +384,7 @@ void RCTWebView2ComponentView::OnCoreWebView2SourceChanged(
             event.url = winrt::to_string(m_webView.Source().AbsoluteCanonicalUri());
         }
         event.loading = false;
+        event.title = "";
         event.canGoBack = m_webView ? m_webView.CanGoBack() : false;
         event.canGoForward = m_webView ? m_webView.CanGoForward() : false;
         event.navigationType = "other";
@@ -456,6 +441,7 @@ void RCTWebView2ComponentView::HandleMessageFromJS(winrt::hstring const& message
             }
             event.data = winrt::to_string(message);
             event.loading = false;
+            event.title = "";
             event.canGoBack = m_webView ? m_webView.CanGoBack() : false;
             event.canGoForward = m_webView ? m_webView.CanGoForward() : false;
             eventEmitter->onMessage(event);
@@ -483,6 +469,46 @@ void RCTWebView2ComponentView::WriteCookiesToWebView2(std::string const& cookies
             cookieData.count("Domain") ? winrt::to_hstring(cookieData["Domain"]) : L"",
             cookieData.count("Path") ? winrt::to_hstring(cookieData["Path"]) : L"");
         cookieManager.AddOrUpdateCookie(cookie);
+    }
+}
+
+void RCTWebView2ComponentView::ResolvePendingNavigation(double lockIdentifier, bool shouldStart) noexcept {
+    try {
+        auto it = s_pendingNavigations.find(lockIdentifier);
+        if (it == s_pendingNavigations.end()) {
+            return;
+        }
+
+        auto weakView = it->second.first;
+        auto url = it->second.second;
+        s_pendingNavigations.erase(it);
+
+        if (!shouldStart) {
+            return;
+        }
+
+        if (auto view = weakView.get()) {
+            view->m_approvedUrls.insert(url);
+            view->NavigateToUrl(url);
+        }
+    } catch (...) {
+        // Resolution failure is non-fatal
+    }
+}
+
+void RCTWebView2ComponentView::NavigateToUrl(std::string const& url) noexcept {
+    if (!m_webView || url.empty()) {
+        return;
+    }
+
+    try {
+        if (m_webView.CoreWebView2()) {
+            m_webView.CoreWebView2().Navigate(winrt::to_hstring(url));
+        } else {
+            m_webView.Source(winrt::Windows::Foundation::Uri(winrt::to_hstring(url)));
+        }
+    } catch (...) {
+        // Navigation retry failed
     }
 }
 
@@ -530,9 +556,7 @@ void RCTWebView2ComponentView::HandlePostMessageCommand(std::string data) noexce
 }
 
 void RCTWebView2ComponentView::HandleLoadUrlCommand(std::string url) noexcept {
-    if (m_webView) {
-        m_webView.Source(winrt::Windows::Foundation::Uri(winrt::to_hstring(url)));
-    }
+    NavigateToUrl(url);
 }
 
 void RCTWebView2ComponentView::HandleClearCacheCommand(bool /*includeDiskFiles*/) noexcept {
@@ -545,5 +569,3 @@ void RCTWebView2ComponentView::HandleClearCacheCommand(bool /*includeDiskFiles*/
 }
 
 } // namespace winrt::ReactNativeWebView::implementation
-
-#endif // RNW_NEW_ARCH

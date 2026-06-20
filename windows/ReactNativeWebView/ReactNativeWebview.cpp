@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "ReactNativeWebview.h"
+#include "RCTWebView2ComponentView.h"
 
 namespace winrt::ReactNativeWebview
 {
@@ -11,9 +12,17 @@ void RNCWebViewModule::Initialize(React::ReactContext const &reactContext) noexc
   m_context = reactContext;
 }
 
-void RNCWebViewModule::shouldStartLoadWithLockIdentifier(bool /*shouldStart*/, double /*lockIdentifier*/) noexcept {
-  // Implementation for handling should start load request callback
-  // This is called from JS to respond to onShouldStartLoadWithRequest
+void RNCWebViewModule::shouldStartLoadWithLockIdentifier(bool shouldStart, double lockIdentifier) noexcept {
+  // Resolve the pending onShouldStartLoadWithRequest decision on the target WebView.
+  // The WebView2 control must be accessed on the UI thread, so dispatch from the JS thread.
+  auto uiDispatcher = m_context.UIDispatcher();
+  if (uiDispatcher) {
+    uiDispatcher.Post([shouldStart, lockIdentifier]() {
+      ReactNativeWebView::implementation::RCTWebView2ComponentView::ResolvePendingNavigation(lockIdentifier, shouldStart);
+    });
+  } else {
+    ReactNativeWebView::implementation::RCTWebView2ComponentView::ResolvePendingNavigation(lockIdentifier, shouldStart);
+  }
 }
 
 void RNCWebViewModule::isFileUploadSupported(React::ReactPromise<bool> &&promise) noexcept {

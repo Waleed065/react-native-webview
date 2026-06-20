@@ -70,7 +70,6 @@ export default function MultiMessaging() {
           onMessage={(e: { nativeEvent: { data?: string } }) => {
             console.log('Message received from JS: ', e.nativeEvent.data);
           }}
-          useWebView2
         />
       </View>
 
@@ -98,7 +97,6 @@ export default function MultiMessaging() {
           onMessage={(e: { nativeEvent: { data?: string } }) => {
             console.log('Message received from JS2: ', e.nativeEvent.data);
           }}
-          useWebView2
         />
       </View>
     </View>

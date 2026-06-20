@@ -44,10 +44,6 @@ import {
 
 export interface WindowsWebViewProps extends WebViewSharedProps {
   /**
-   * Boolean value that determines whether the web view should use the new chromium based edge webview.
-   */
-  useWebView2?: boolean;
-  /**
    * Function that is invoked when the `WebView` should open a new window.
    * @platform windows
    */
@@ -83,7 +79,6 @@ const WebViewComponent = forwardRef<{}, WindowsWebViewProps>(
       source,
       nativeConfig,
       onShouldStartLoadWithRequest: onShouldStartLoadWithRequestProp,
-      useWebView2: _useWebView2,
       onScroll: _onScroll, // Exclude from otherProps - not currently supported on Windows
       ...otherProps
     },

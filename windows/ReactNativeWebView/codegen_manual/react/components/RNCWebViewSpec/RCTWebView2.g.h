@@ -7,14 +7,10 @@
 
 #include <NativeModules.h>
 
-#ifdef RNW_NEW_ARCH
 #include <JSValueComposition.h>
 
 #include <winrt/Microsoft.ReactNative.Composition.h>
 #include <winrt/Microsoft.UI.Composition.h>
-#endif // #ifdef RNW_NEW_ARCH
-
-#ifdef RNW_NEW_ARCH
 
 namespace RNCWebViewCodegen {
 
@@ -632,7 +628,7 @@ void RegisterRCTWebView2NativeComponent(
     winrt::Microsoft::ReactNative::IReactPackageBuilder const &packageBuilder,
     std::function<void(const winrt::Microsoft::ReactNative::Composition::IReactCompositionViewComponentBuilder&)> builderCallback) noexcept {
   packageBuilder.as<winrt::Microsoft::ReactNative::IReactPackageBuilderFabric>().AddViewComponent(
-      L"WebView2", [builderCallback](winrt::Microsoft::ReactNative::IReactViewComponentBuilder const &builder) noexcept {
+      L"RCTWebView2", [builderCallback](winrt::Microsoft::ReactNative::IReactViewComponentBuilder const &builder) noexcept {
         auto compBuilder = builder.as<winrt::Microsoft::ReactNative::Composition::IReactCompositionViewComponentBuilder>();
 
         builder.SetCreateProps([](winrt::Microsoft::ReactNative::ViewProps props,
@@ -721,5 +717,3 @@ void RegisterRCTWebView2NativeComponent(
 }
 
 } // namespace RNCWebViewCodegen
-
-#endif // #ifdef RNW_NEW_ARCH
