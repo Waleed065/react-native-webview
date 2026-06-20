@@ -367,9 +367,10 @@ void RCTWebView2ComponentView::OnCoreWebView2Initialized(
     if (!m_webView) return;
     
     // If the WebView2 runtime failed to initialize, surface it as a loading error.
-    if (args.InitializationException() != 0) {
+    auto initHr = args.Exception();
+    if (initHr != S_OK) {
         try {
-            auto error = winrt::hresult_error(args.InitializationException());
+            auto error = winrt::hresult_error(initHr);
             EmitLoadingError("", "WebView2Initialization", error.code(), winrt::to_string(error.message()));
         } catch (...) {
             EmitLoadingError("", "WebView2Initialization", E_FAIL, "Failed to initialize WebView2 runtime");
