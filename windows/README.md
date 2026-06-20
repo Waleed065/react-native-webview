@@ -23,7 +23,6 @@ This fork targets **React Native Windows C++ New Architecture (Fabric/Bridgeless
 - `webviewDebuggingEnabled`
 - `javaScriptEnabled`
 - `cacheEnabled` (clears disk cache when set to `false`; WebView2 has no per-request no-cache mode)
-- `incognito` (in-private profile; most effective when set before first render)
 
 ## What is NOT supported
 
@@ -38,6 +37,7 @@ The following shared props/events are declared but not yet wired on Windows:
 - `mediaPlaybackRequiresUserAction`
 - `javaScriptCanOpenWindowsAutomatically`
 - `showsHorizontalScrollIndicator` / `showsVerticalScrollIndicator`
+- `incognito` (in-private profile is not wired to the underlying WebView2 runtime in this version)
 
 ## Integrating into a C++ New Arch app
 
@@ -74,7 +74,7 @@ The messaging bridge follows the standard `react-native-webview` contract used b
 To keep offline/PWA caching working:
 
 - Keep `cacheEnabled={true}` (default). Setting it to `false` clears disk cache.
-- Do **not** set `incognito={true}`. In-private profiles do not persist storage across sessions, so service worker caches and localStorage will be lost when the app closes.
+- `incognito` is not wired on Windows, so the WebView always uses the default (non-private) profile. If it becomes supported in the future, avoid it for PWAs because in-private profiles do not persist storage across sessions.
 - Avoid calling `clearCache(true)` unless you intentionally want to reset offline data. `clearCache(false)` clears only disk cache; `clearCache(true)` also clears DOM storage (localStorage, IndexedDB, CacheStorage/service workers).
 - If your PWA requires HTTP Basic auth or custom headers, note that `basicAuthCredential` and `source.headers` are not wired yet on Windows.
 

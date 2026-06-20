@@ -595,20 +595,10 @@ void RCTWebView2ComponentView::ApplyProfileSettings() {
         return;
     }
 
-    // If CoreWebView2 is not initialized yet, set CreationProperties so they take effect.
-    if (!m_webView.CoreWebView2()) {
-        try {
-            auto creationProps = winrt::Microsoft::UI::Xaml::Controls::CoreWebView2CreationProperties();
-            // IsInPrivateModeEnabled can only be configured before CoreWebView2 initialization.
-            creationProps.IsInPrivateModeEnabled(m_incognito.has_value() && m_incognito.value());
-            m_webView.CreationProperties(creationProps);
-        } catch (...) {
-            // Ignore failures.
-        }
-        return;
-    }
-
-    // Post-initialization changes to incognito are not supported by WebView2.
+    // Pre-initialization profile options (e.g. in-private mode via CreationProperties)
+    // are not wired in this RNW/WebView2 version. Once CoreWebView2 is created, the
+    // profile cannot be changed, so incognito must be set before first render on the JS
+    // side if the underlying runtime supports it.
     // cacheEnabled transitions are handled directly in UpdateProps.
 }
 
