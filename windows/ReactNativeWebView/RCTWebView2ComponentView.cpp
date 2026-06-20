@@ -16,7 +16,7 @@
 namespace winrt::ReactNativeWebView::implementation {
 
 // Static pending-navigation state for onShouldStartLoadWithRequest.
-std::unordered_map<double, std::pair<winrt::weak_ref<RCTWebView2ComponentView>, std::string>>
+std::unordered_map<double, std::pair<winrt::weak_ref<winrt::IInspectable>, std::string>>
     RCTWebView2ComponentView::s_pendingNavigations;
 double RCTWebView2ComponentView::s_nextLockIdentifier{0};
 
@@ -233,7 +233,7 @@ void RCTWebView2ComponentView::OnNavigationStarting(
             args.Cancel(true);
 
             double lockIdentifier = ++s_nextLockIdentifier;
-            s_pendingNavigations[lockIdentifier] = {winrt::make_weak(this->as<winrt::IInspectable>()), url};
+            s_pendingNavigations[lockIdentifier] = {winrt::make_weak(static_cast<winrt::IInspectable>(*this)), url};
 
             // Defensive cap to prevent unbounded growth if JS never responds.
             constexpr size_t maxPendingNavigations = 32;
