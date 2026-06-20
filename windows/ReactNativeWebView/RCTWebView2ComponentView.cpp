@@ -211,7 +211,7 @@ void RCTWebView2ComponentView::OnNavigationStarting(
     
     std::string url;
     try {
-        url = winrt::to_string(args.Uri().AbsoluteCanonicalUri());
+        url = winrt::to_string(args.Uri());
     } catch (...) {
         // If we cannot read the URI, cancel the navigation to be safe.
         args.Cancel(true);
