@@ -412,61 +412,61 @@ struct RCTWebView2EventEmitter {
   using OnShouldStartLoadWithRequest = RCTWebView2_OnShouldStartLoadWithRequest;
 
   void onOpenWindow(OnOpenWindow &value) const {
-    m_eventEmitter.DispatchEvent(L"openWindow", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
+    m_eventEmitter.DispatchEvent(L"topOpenWindow", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
       winrt::Microsoft::ReactNative::WriteValue(writer, value);
     });
   }
 
   void onSourceChanged(OnSourceChanged &value) const {
-    m_eventEmitter.DispatchEvent(L"sourceChanged", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
+    m_eventEmitter.DispatchEvent(L"topSourceChanged", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
       winrt::Microsoft::ReactNative::WriteValue(writer, value);
     });
   }
 
   void onLoadingError(OnLoadingError &value) const {
-    m_eventEmitter.DispatchEvent(L"loadingError", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
+    m_eventEmitter.DispatchEvent(L"topLoadingError", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
       winrt::Microsoft::ReactNative::WriteValue(writer, value);
     });
   }
 
   void onLoadingFinish(OnLoadingFinish &value) const {
-    m_eventEmitter.DispatchEvent(L"loadingFinish", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
+    m_eventEmitter.DispatchEvent(L"topLoadingFinish", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
       winrt::Microsoft::ReactNative::WriteValue(writer, value);
     });
   }
 
   void onLoadingProgress(OnLoadingProgress &value) const {
-    m_eventEmitter.DispatchEvent(L"loadingProgress", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
+    m_eventEmitter.DispatchEvent(L"topLoadingProgress", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
       winrt::Microsoft::ReactNative::WriteValue(writer, value);
     });
   }
 
   void onLoadingStart(OnLoadingStart &value) const {
-    m_eventEmitter.DispatchEvent(L"loadingStart", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
+    m_eventEmitter.DispatchEvent(L"topLoadingStart", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
       winrt::Microsoft::ReactNative::WriteValue(writer, value);
     });
   }
 
   void onHttpError(OnHttpError &value) const {
-    m_eventEmitter.DispatchEvent(L"httpError", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
+    m_eventEmitter.DispatchEvent(L"topHttpError", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
       winrt::Microsoft::ReactNative::WriteValue(writer, value);
     });
   }
 
   void onMessage(OnMessage &value) const {
-    m_eventEmitter.DispatchEvent(L"message", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
+    m_eventEmitter.DispatchEvent(L"topMessage", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
       winrt::Microsoft::ReactNative::WriteValue(writer, value);
     });
   }
 
   void onScroll(OnScroll &value) const {
-    m_eventEmitter.DispatchEvent(L"scroll", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
+    m_eventEmitter.DispatchEvent(L"topScroll", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
       winrt::Microsoft::ReactNative::WriteValue(writer, value);
     });
   }
 
   void onShouldStartLoadWithRequest(OnShouldStartLoadWithRequest &value) const {
-    m_eventEmitter.DispatchEvent(L"shouldStartLoadWithRequest", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
+    m_eventEmitter.DispatchEvent(L"topShouldStartLoadWithRequest", [value](const winrt::Microsoft::ReactNative::IJSValueWriter writer) {
       winrt::Microsoft::ReactNative::WriteValue(writer, value);
     });
   }
