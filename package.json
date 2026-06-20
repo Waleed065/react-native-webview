@@ -29,7 +29,7 @@
   ],
   "main": "index.js",
   "typings": "index.d.ts",
-  "react-native": "src/index.ts",
+  "react-native": "lib/index.js",
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",

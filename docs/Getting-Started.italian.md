@@ -86,16 +86,16 @@ Nota che se desideri abilitare lo scroll tramite touch per il componente WebView
 
 ## 3. Supporto per WebView2
 
-Il controllo WebView2 è un controllo [WinUI](https://learn.microsoft.com/it-it/windows/apps/winui/) che renderizza contenuti web utilizzando il motore di rendering di Microsoft Edge (Chromium). Abbiamo aggiunto il supporto per il controllo WebView2 al modulo della comunità react-native-webview nella versione 11.18.0.
-Se la tua app utilizza RNW v0.68 o versioni successive, segui questi passaggi:
+Questo fork utilizza esclusivamente il controllo WebView2 di WinUI 3 come visualizzatore web nativo. WebView2 renderizza i contenuti web utilizzando il motore di rendering Microsoft Edge (Chromium). Il vecchio prop `useWebView2` è stato rimosso: WebView2 è l'unica implementazione disponibile.
 
-1. Lascia che l'autolinking si occupi di aggiungere il progetto `ReactNativeWebView` alla tua app.
+Requisiti:
 
-2. Personalizza la versione di WinUI 2.x della tua app alla versione 2.8.0-prerelease.210927001 o successiva. Consulta [questo](https://microsoft.github.io/react-native-windows/docs/customizing-sdk-versions) per istruzioni. Il supporto WinUI 2.x per WebView2 non è ancora disponibile nelle versioni "stabile", quindi per ora dovrai utilizzare una versione prerelease.
+- React Native Windows C++ New Architecture (Fabric/Bridgeless)
+- WinUI 3 Desktop (Win32)
+- react-native-windows >= 0.82.0-preview.11
+- Microsoft.WindowsAppSDK 1.8.260209005 o successivo
 
-3. Potrebbe essere necessario specificare il pacchetto `Microsoft.Web.WebView2` nel file `packages.config` della tua app. Facendo ciò, riceverai un errore di compilazione che elenca la versione del pacchetto che devi specificare. Aggiungi semplicemente il pacchetto al tuo `packages.config` e dovresti essere pronto per continuare.
-
-Ora puoi accedere al controllo WebView2 di WinUI da JavaScript della tua app tramite la prop `useWebView2`.
+Non è più supportata la vecchia architettura UWP / Paper / WinUI 2 / i template C#.
 
 ## 4. Importa la webview nel tuo componente
 

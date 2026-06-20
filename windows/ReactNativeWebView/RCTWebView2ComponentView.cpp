@@ -74,9 +74,8 @@ void RCTWebView2ComponentView::InitializeContentIsland(
     islandView.Connect(m_island.ContentIsland());
     m_islandView = winrt::make_weak(islandView);
     
-    // Explicitly trigger CoreWebView2 initialization.
-    // In XamlIsland hosting, the WebView2 won't auto-initialize its browser process.
-    m_webView.EnsureCoreWebView2Async();
+    // CoreWebView2 initialization is deferred until UpdateProps so CreationProperties
+    // (incognito, etc.) can be set first.
 }
 
 void RCTWebView2ComponentView::UpdateProps(
@@ -102,16 +101,67 @@ void RCTWebView2ComponentView::UpdateProps(
         m_linkHandlingEnabled = newProps->linkHandlingEnabled.value();
     }
     
-    // Apply injected JavaScript
+    // Apply injected JavaScript (runs at document end)
     if (newProps->injectedJavaScript.has_value()) {
         m_injectedJavascript = winrt::to_hstring(newProps->injectedJavaScript.value());
     }
     
-    // Apply user agent
+    // Apply injected JavaScript before content loaded (runs before page scripts)
+    if (newProps->injectedJavaScriptBeforeContentLoaded.has_value()) {
+        m_injectedJavascriptBeforeContentLoaded = winrt::to_hstring(newProps->injectedJavaScriptBeforeContentLoaded.value());
+    }
+    
+    // Apply user agent / application name
     if (newProps->userAgent.has_value()) {
         m_userAgent = winrt::to_hstring(newProps->userAgent.value());
-        if (m_webView.CoreWebView2()) {
-            m_webView.CoreWebView2().Settings().UserAgent(m_userAgent);
+    }
+    if (newProps->applicationNameForUserAgent.has_value()) {
+        m_applicationNameForUserAgent = newProps->applicationNameForUserAgent.value();
+    }
+    
+    // Store settings that must be applied when CoreWebView2 is ready
+    m_javaScriptEnabled = newProps->javaScriptEnabled;
+    m_webviewDebuggingEnabled = newProps->webviewDebuggingEnabled;
+    m_cacheEnabled = newProps->cacheEnabled;
+    if (newProps->incognito.has_value()) {
+        m_incognito = newProps->incognito.value();
+    }
+    
+    ApplySettings();
+    
+    // Inject the JS bridge if messaging was just enabled and CoreWebView2 is ready.
+    bool messagingBecameEnabled = !oldProps ||
+        (!oldProps->messagingEnabled && newProps->messagingEnabled);
+    if (messagingBecameEnabled && m_webView.CoreWebView2()) {
+        InjectMessagingBridge();
+    }
+    
+    // Re-inject document-start script if the prop changed.
+    bool beforeContentChanged = !oldProps ||
+        newProps->injectedJavaScriptBeforeContentLoaded != oldProps->injectedJavaScriptBeforeContentLoaded;
+    if (beforeContentChanged) {
+        ApplyInjectedJavaScriptBeforeContentLoaded();
+    }
+
+    // Clear disk cache when cacheEnabled transitions from true to false.
+    if (oldProps && newProps->cacheEnabled != oldProps->cacheEnabled && !newProps->cacheEnabled) {
+        if (m_webView && m_webView.CoreWebView2()) {
+            try {
+                m_webView.CoreWebView2().Profile().ClearBrowsingDataAsync(
+                    winrt::Microsoft::Web::WebView2::Core::CoreWebView2BrowsingDataKinds::DiskCache);
+            } catch (...) {
+                // Ignore failures.
+            }
+        }
+    }
+    
+    // Trigger CoreWebView2 initialization now that CreationProperties are configured.
+    if (!m_ensureCoreWebView2Called) {
+        m_ensureCoreWebView2Called = true;
+        try {
+            m_webView.EnsureCoreWebView2Async();
+        } catch (...) {
+            // Initialization failure will be surfaced via OnCoreWebView2Initialized.
         }
     }
     
@@ -134,16 +184,6 @@ void RCTWebView2ComponentView::UpdateProps(
             // CoreWebView2 not ready yet - save HTML for later navigation in OnCoreWebView2Initialized
             m_pendingHtml = newProps->newSource.html.value();
         }
-    }
-    
-    // Apply debugging enabled
-    if (newProps->webviewDebuggingEnabled.has_value() && m_webView.CoreWebView2()) {
-        m_webView.CoreWebView2().Settings().AreDevToolsEnabled(newProps->webviewDebuggingEnabled.value());
-    }
-    
-    // Apply JavaScript enabled
-    if (m_webView.CoreWebView2()) {
-        m_webView.CoreWebView2().Settings().IsScriptEnabled(newProps->javaScriptEnabled);
     }
 }
 
@@ -218,6 +258,8 @@ void RCTWebView2ComponentView::OnNavigationStarting(
         return;
     }
 
+    auto navigationType = NavigationTypeToString(args.NavigationKind());
+
     // If this URL was already approved by JS (e.g. retry after shouldStartLoadWithRequest),
     // allow it without re-emitting the event.
     auto approvedIt = m_approvedUrls.find(url);
@@ -254,8 +296,8 @@ void RCTWebView2ComponentView::OnNavigationStarting(
             event.canGoBack = m_webView ? m_webView.CanGoBack() : false;
             event.canGoForward = m_webView ? m_webView.CanGoForward() : false;
             event.lockIdentifier = lockIdentifier;
-            event.navigationType = "other";
-            event.isTopFrame = true;
+            event.navigationType = navigationType;
+            event.isTopFrame = true; // NavigationStarting only fires for top-frame navigations
             eventEmitter->onShouldStartLoadWithRequest(event);
             return;
         }
@@ -270,83 +312,85 @@ void RCTWebView2ComponentView::OnNavigationStarting(
             event.title = "";
             event.canGoBack = m_webView ? m_webView.CanGoBack() : false;
             event.canGoForward = m_webView ? m_webView.CanGoForward() : false;
-            event.navigationType = "other";
+            event.navigationType = navigationType;
             eventEmitter->onLoadingStart(event);
         }
     } catch (...) {
         // Event dispatch failure is non-fatal
     }
-
-    if (m_messagingEnabled && m_webView) {
-        try {
-            if (m_messageToken) {
-                m_webView.WebMessageReceived(m_messageToken);
-            }
-            m_messageToken = m_webView.WebMessageReceived(
-                [this](auto const& /*sender*/, winrt::Microsoft::Web::WebView2::Core::CoreWebView2WebMessageReceivedEventArgs const& messageArgs) {
-                    try {
-                        auto message = messageArgs.TryGetWebMessageAsString();
-                        OnMessagePosted(message);
-                    } catch (...) {
-                        return;
-                    }
-                });
-        } catch (...) {
-            // WebMessageReceived registration failure
-        }
-    }
 }
 
 void RCTWebView2ComponentView::OnNavigationCompleted(
-    winrt::Microsoft::Web::WebView2::Core::CoreWebView2NavigationCompletedEventArgs const& /*args*/) {
+    winrt::Microsoft::Web::WebView2::Core::CoreWebView2NavigationCompletedEventArgs const& args) {
+    
+    std::string url;
+    if (m_webView && m_webView.Source()) {
+        try {
+            url = winrt::to_string(m_webView.Source().AbsoluteCanonicalUri());
+        } catch (...) {
+            url = "";
+        }
+    }
+    
+    if (!args.IsSuccess()) {
+        // Surface the failure as a loading error. We do not emit loadingFinish.
+        auto status = args.WebErrorStatus();
+        EmitLoadingError(url, "WebView2Navigation", static_cast<int32_t>(status), "Navigation failed");
+        return;
+    }
+
+    // Surface HTTP errors (4xx/5xx) the same way Android/iOS do.
+    auto httpStatus = args.HttpStatusCode();
+    if (httpStatus >= 400) {
+        EmitHttpError(url, static_cast<int32_t>(httpStatus));
+    }
     
     try {
         if (auto eventEmitter = EventEmitter()) {
             RNCWebViewCodegen::RCTWebView2EventEmitter::OnLoadingFinish event;
-            if (m_webView && m_webView.Source()) {
-                event.url = winrt::to_string(m_webView.Source().AbsoluteCanonicalUri());
-            }
+            event.url = url;
             event.loading = false;
             event.title = "";
             event.canGoBack = m_webView ? m_webView.CanGoBack() : false;
             event.canGoForward = m_webView ? m_webView.CanGoForward() : false;
-            event.navigationType = "other";
+            // navigationType is intentionally omitted from loadingFinish to match iOS/Android.
             eventEmitter->onLoadingFinish(event);
         }
     } catch (...) {
         // Event dispatch failure is non-fatal
     }
-
-    if (m_messagingEnabled && m_webView) {
-        try {
-            winrt::hstring message = LR"(
-                window.alert = function (msg) {window.chrome.webview.postMessage(`{"type":"__alert","message":"${msg}"}`)};
-                window.ReactNativeWebView = {postMessage: function (data) {window.chrome.webview.postMessage(String(data))}};
-                const originalPostMessage = globalThis.postMessage;
-                globalThis.postMessage = function (data) { originalPostMessage(data); globalThis.ReactNativeWebView.postMessage(typeof data == 'string' ? data : JSON.stringify(data));};
-                window.chrome.webview.addEventListener('message', function(e) {
-                    window.dispatchEvent(new MessageEvent('message', {data: e.data}));
-                    document.dispatchEvent(new MessageEvent('message', {data: e.data}));
-                });
-            )";
-            m_webView.ExecuteScriptAsync(message);
-        } catch (...) {
-            // JS injection failure
-        }
-    }
 }
 
 void RCTWebView2ComponentView::OnCoreWebView2Initialized(
-    winrt::Microsoft::UI::Xaml::Controls::CoreWebView2InitializedEventArgs const& /*args*/) {
+    winrt::Microsoft::UI::Xaml::Controls::CoreWebView2InitializedEventArgs const& args) {
     
-    if (!m_webView || !m_webView.CoreWebView2()) return;
+    if (!m_webView) return;
+    
+    // If the WebView2 runtime failed to initialize, surface it as a loading error.
+    if (args.InitializationException() != 0) {
+        try {
+            auto error = winrt::hresult_error(args.InitializationException());
+            EmitLoadingError("", "WebView2Initialization", error.code(), winrt::to_string(error.message()));
+        } catch (...) {
+            EmitLoadingError("", "WebView2Initialization", E_FAIL, "Failed to initialize WebView2 runtime");
+        }
+        return;
+    }
+    
+    if (!m_webView.CoreWebView2()) return;
+    
+    // Capture the default user agent so applicationNameForUserAgent can append to it.
+    try {
+        m_defaultUserAgent = m_webView.CoreWebView2().Settings().UserAgent();
+    } catch (...) {
+        m_defaultUserAgent = L"";
+    }
     
     RegisterCoreWebView2Events();
-    
-    // Apply user agent if set
-    if (!m_userAgent.empty()) {
-        m_webView.CoreWebView2().Settings().UserAgent(m_userAgent);
-    }
+    ApplySettings();
+    RegisterMessagingBridge();
+    InjectMessagingBridge();
+    ApplyInjectedJavaScriptBeforeContentLoaded();
     
     // Navigate to deferred HTML source if pending
     if (!m_pendingHtml.empty()) {
@@ -396,18 +440,19 @@ void RCTWebView2ComponentView::OnCoreWebView2NewWindowRequested(
     winrt::Microsoft::Web::WebView2::Core::CoreWebView2 const& /*sender*/,
     winrt::Microsoft::Web::WebView2::Core::CoreWebView2NewWindowRequestedEventArgs const& args) {
     
+    // Always mark the request as handled so WebView2 itself does not try to create a popup.
+    args.Handled(true);
+    
     if (m_linkHandlingEnabled) {
         if (auto eventEmitter = EventEmitter()) {
             RNCWebViewCodegen::RCTWebView2EventEmitter::OnOpenWindow event;
             event.targetUrl = winrt::to_string(args.Uri());
             eventEmitter->onOpenWindow(event);
         }
-        args.Handled(true);
     } else {
         try {
             winrt::Windows::Foundation::Uri uri(args.Uri());
             winrt::Windows::System::Launcher::LaunchUriAsync(uri);
-            args.Handled(true);
         } catch (winrt::hresult_error&) {
             // Do Nothing
         }
@@ -513,6 +558,186 @@ void RCTWebView2ComponentView::NavigateToUrl(std::string const& url) noexcept {
     }
 }
 
+void RCTWebView2ComponentView::ApplySettings() {
+    if (!m_webView || !m_webView.CoreWebView2()) {
+        return;
+    }
+
+    auto settings = m_webView.CoreWebView2().Settings();
+    settings.IsScriptEnabled(m_javaScriptEnabled);
+
+    if (m_webviewDebuggingEnabled.has_value()) {
+        settings.AreDevToolsEnabled(m_webviewDebuggingEnabled.value());
+    }
+
+    ApplyUserAgent();
+    ApplyProfileSettings();
+}
+
+void RCTWebView2ComponentView::ApplyUserAgent() {
+    if (!m_webView || !m_webView.CoreWebView2()) {
+        return;
+    }
+
+    auto settings = m_webView.CoreWebView2().Settings();
+    if (!m_userAgent.empty()) {
+        // Explicit userAgent wins, matching Android/iOS behavior.
+        settings.UserAgent(m_userAgent);
+    } else if (!m_applicationNameForUserAgent.empty() && !m_defaultUserAgent.empty()) {
+        // Append applicationNameForUserAgent to the default UA.
+        settings.UserAgent(m_defaultUserAgent + L" " + winrt::to_hstring(m_applicationNameForUserAgent));
+    }
+}
+
+void RCTWebView2ComponentView::ApplyProfileSettings() {
+    if (!m_webView) {
+        return;
+    }
+
+    // If CoreWebView2 is not initialized yet, set CreationProperties so they take effect.
+    if (!m_webView.CoreWebView2()) {
+        try {
+            auto creationProps = winrt::Microsoft::UI::Xaml::Controls::CoreWebView2CreationProperties();
+            // IsInPrivateModeEnabled can only be configured before CoreWebView2 initialization.
+            creationProps.IsInPrivateModeEnabled(m_incognito.has_value() && m_incognito.value());
+            m_webView.CreationProperties(creationProps);
+        } catch (...) {
+            // Ignore failures.
+        }
+        return;
+    }
+
+    // Post-initialization changes to incognito are not supported by WebView2.
+    // cacheEnabled transitions are handled directly in UpdateProps.
+}
+
+void RCTWebView2ComponentView::ApplyInjectedJavaScriptBeforeContentLoaded() {
+    if (!m_webView || !m_webView.CoreWebView2() || m_injectedJavascriptBeforeContentLoaded.empty()) {
+        return;
+    }
+
+    try {
+        // This script runs before any page scripts, matching iOS/Android document-start behavior.
+        auto op = m_webView.CoreWebView2().AddScriptToExecuteOnDocumentCreatedAsync(m_injectedJavascriptBeforeContentLoaded);
+        (void)op; // fire-and-forget; the script id is not needed for basic injection.
+    } catch (...) {
+        // Injection failure is non-fatal.
+    }
+}
+
+void RCTWebView2ComponentView::RegisterMessagingBridge() {
+    if (!m_webView || !m_webView.CoreWebView2()) {
+        return;
+    }
+
+    // Register the native -> JS message handler once.
+    m_messageReceivedRevoker = m_webView.CoreWebView2().WebMessageReceived(
+        winrt::auto_revoke,
+        [this](auto const& /*sender*/, winrt::Microsoft::Web::WebView2::Core::CoreWebView2WebMessageReceivedEventArgs const& messageArgs) {
+            if (!m_messagingEnabled) {
+                return;
+            }
+            try {
+                auto message = messageArgs.TryGetWebMessageAsString();
+                OnMessagePosted(message);
+            } catch (...) {
+                // Ignore non-string messages.
+            }
+        });
+}
+
+void RCTWebView2ComponentView::InjectMessagingBridge() {
+    if (!m_messagingEnabled || !m_webView || !m_webView.CoreWebView2()) {
+        return;
+    }
+
+    static const winrt::hstring bridgeScript = LR"(
+        window.alert = function (msg) {
+            window.chrome.webview.postMessage(JSON.stringify({ type: '__alert', message: msg }));
+        };
+        window.ReactNativeWebView = {
+            postMessage: function (data) {
+                window.chrome.webview.postMessage(String(data));
+            }
+        };
+        window.chrome.webview.addEventListener('message', function (e) {
+            var origin = window.location.origin;
+            var event = new MessageEvent('message', { data: e.data, origin: origin });
+            window.dispatchEvent(event);
+            document.dispatchEvent(event);
+        });
+    )";
+
+    try {
+        // Inject into the current document immediately (in case it is already loaded).
+        m_webView.CoreWebView2().ExecuteScriptAsync(bridgeScript);
+
+        // Also register for future documents so the bridge is available before page scripts run.
+        if (!m_messagingBridgeDocumentScriptAdded) {
+            auto op = m_webView.CoreWebView2().AddScriptToExecuteOnDocumentCreatedAsync(bridgeScript);
+            (void)op; // fire-and-forget
+            m_messagingBridgeDocumentScriptAdded = true;
+        }
+    } catch (...) {
+        // JS injection failure is non-fatal
+    }
+}
+
+std::string RCTWebView2ComponentView::NavigationTypeToString(
+    winrt::Microsoft::Web::WebView2::Core::CoreWebView2NavigationKind kind) const noexcept {
+    using NavigationKind = winrt::Microsoft::Web::WebView2::Core::CoreWebView2NavigationKind;
+    switch (kind) {
+        case NavigationKind::BackOrForward:
+            return "backforward";
+        case NavigationKind::Reload:
+            return "reload";
+        case NavigationKind::NewDocument:
+        default:
+            return "other";
+    }
+}
+
+void RCTWebView2ComponentView::EmitLoadingError(
+    std::string const& url,
+    std::string const& domain,
+    int32_t code,
+    std::string const& description) noexcept {
+    try {
+        if (auto eventEmitter = EventEmitter()) {
+            RNCWebViewCodegen::RCTWebView2EventEmitter::OnLoadingError event;
+            event.url = url;
+            event.loading = false;
+            event.title = "";
+            event.canGoBack = m_webView ? m_webView.CanGoBack() : false;
+            event.canGoForward = m_webView ? m_webView.CanGoForward() : false;
+            event.domain = domain;
+            event.code = code;
+            event.description = description;
+            eventEmitter->onLoadingError(event);
+        }
+    } catch (...) {
+        // Event dispatch failure is non-fatal
+    }
+}
+
+void RCTWebView2ComponentView::EmitHttpError(std::string const& url, int32_t statusCode) noexcept {
+    try {
+        if (auto eventEmitter = EventEmitter()) {
+            RNCWebViewCodegen::RCTWebView2EventEmitter::OnHttpError event;
+            event.url = url;
+            event.loading = false;
+            event.title = "";
+            event.canGoBack = m_webView ? m_webView.CanGoBack() : false;
+            event.canGoForward = m_webView ? m_webView.CanGoForward() : false;
+            event.statusCode = statusCode;
+            event.description = "HTTP error";
+            eventEmitter->onHttpError(event);
+        }
+    } catch (...) {
+        // Event dispatch failure is non-fatal
+    }
+}
+
 // Command handlers
 void RCTWebView2ComponentView::HandleGoBackCommand() noexcept {
     if (m_webView && m_webView.CanGoBack()) {
@@ -560,12 +785,28 @@ void RCTWebView2ComponentView::HandleLoadUrlCommand(std::string url) noexcept {
     NavigateToUrl(url);
 }
 
-void RCTWebView2ComponentView::HandleClearCacheCommand(bool /*includeDiskFiles*/) noexcept {
-    if (m_webView && m_webView.CoreWebView2()) {
-        auto profile = m_webView.CoreWebView2().Profile();
-        if (profile) {
-            profile.ClearBrowsingDataAsync();
+void RCTWebView2ComponentView::HandleClearCacheCommand(bool includeDiskFiles) noexcept {
+    if (!m_webView || !m_webView.CoreWebView2()) {
+        return;
+    }
+
+    auto profile = m_webView.CoreWebView2().Profile();
+    if (!profile) {
+        return;
+    }
+
+    try {
+        // For PWA/offline use cases, avoid clearing all profile data.
+        // Clear disk cache only by default. When includeDiskFiles is true,
+        // also clear DOM storage (localStorage, IndexedDB, CacheStorage/service workers).
+        auto dataKinds = winrt::Microsoft::Web::WebView2::Core::CoreWebView2BrowsingDataKinds::DiskCache;
+        if (includeDiskFiles) {
+            dataKinds = dataKinds |
+                winrt::Microsoft::Web::WebView2::Core::CoreWebView2BrowsingDataKinds::AllDomStorage;
         }
+        profile.ClearBrowsingDataAsync(dataKinds);
+    } catch (...) {
+        // Ignore failures.
     }
 }
 

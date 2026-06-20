@@ -83,7 +83,6 @@ Questo documento elenca le attuali proprietà e metodi pubblici di React Native 
 - [`basicAuthCredential`](Reference.italian.md#basicAuthCredential)
 - [`enableApplePay`](Reference.italian.md#enableApplePay)
 - [`forceDarkOn`](Reference.italian.md#forceDarkOn)
-- [`useWebView2`](Reference.italian.md#useWebView2)
 - [`minimumFontSize`](Reference.italian.md#minimumFontSize)
 - [`downloadingMessage`](Reference.italian.md#downloadingMessage)
 - [`lackPermissionToDownloadMessage`](Reference.italian.md#lackPermissionToDownloadMessage)
@@ -1526,20 +1525,6 @@ Un oggetto che specifica le credenziali di un utente da usare per l'autenticazio
 | Tipo   | Obbligatorio |
 | ------ | ------------ |
 | object | No           |
-
-### `useWebView2`[⬆](#props-index)
-
-Usa il controllo WebView2 di WinUI al posto del controllo WebView come visualizzatore web nativo. Il controllo WebView2 è un controllo WinUI che renderizza il contenuto web utilizzando il motore di esecuzione Microsoft Edge (Chromium). L'opzione può essere attivata o disattivata durante l'esecuzione e supporta Fast Refresh. Per saperne di più leggi la sezione riguardante WebView2 nella [guida getting-started](Getting-Started.italian.md#3-supporto-per-webview2).
-
-| Tipo    | Obbligatorio | Piattaforma |
-| ------- | ------------ | ----------- |
-| boolean | No           | Windows     |
-
-Esempio:
-
-```javascript
-<WebView useWebView2={true} />
-```
 
 ### `minimumFontSize`[⬆](#props-index)
 

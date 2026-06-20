@@ -17,18 +17,32 @@ This fork targets **React Native Windows C++ New Architecture (Fabric/Bridgeless
 - Bidirectional messaging (`postMessage`, `onMessage`, `injectJavaScript`)
 - `onOpenWindow` / `onSourceChanged`
 - `onShouldStartLoadWithRequest`
-- `injectedJavaScript`
-- `userAgent`
+- `onLoadingStart` / `onLoadingFinish` / `onLoadingError` / `onHttpError`
+- `injectedJavaScript` / `injectedJavaScriptBeforeContentLoaded`
+- `userAgent` / `applicationNameForUserAgent`
 - `webviewDebuggingEnabled`
 - `javaScriptEnabled`
+- `cacheEnabled` (clears disk cache when set to `false`; WebView2 has no per-request no-cache mode)
+- `incognito` (in-private profile; most effective when set before first render)
 
 ## What is NOT supported
 
 Legacy UWP / Old Architecture (Paper) / WinUI 2 / C# project templates are intentionally not supported. The old `useWebView2` prop has been removed because WebView2 is the only implementation.
 
+The following shared props/events are declared but not yet wired on Windows:
+
+- `onLoadingProgress`
+- `onScroll`
+- `source.headers` / `source.method` / `source.body` / `source.baseUrl`
+- `basicAuthCredential`
+- `mediaPlaybackRequiresUserAction`
+- `javaScriptCanOpenWindowsAutomatically`
+- `showsHorizontalScrollIndicator` / `showsVerticalScrollIndicator`
+
 ## Integrating into a C++ New Arch app
 
 1. Create your RN Windows app with the `cpp-app` template:
+
    ```bash
    npx react-native init MyApp --template react-native@latest
    cd MyApp
@@ -36,6 +50,7 @@ Legacy UWP / Old Architecture (Paper) / WinUI 2 / C# project templates are inten
    ```
 
 2. Install this fork:
+
    ```bash
    npm install <your-fork-git-url>
    ```
@@ -46,6 +61,22 @@ Legacy UWP / Old Architecture (Paper) / WinUI 2 / C# project templates are inten
    ```bash
    npx react-native run-windows
    ```
+
+## PWA / offline usage
+
+WebView2 fully supports service workers, CacheStorage, and localStorage, so loading a PWA that works offline is supported out of the box.
+
+The messaging bridge follows the standard `react-native-webview` contract used by your existing PWA:
+
+- PWA → native: `window.ReactNativeWebView.postMessage(JSON.stringify({ type, payload }))`
+- Native → PWA: dispatched as a `MessageEvent` on `window`/`document` with `origin` set to the page origin.
+
+To keep offline/PWA caching working:
+
+- Keep `cacheEnabled={true}` (default). Setting it to `false` clears disk cache.
+- Do **not** set `incognito={true}`. In-private profiles do not persist storage across sessions, so service worker caches and localStorage will be lost when the app closes.
+- Avoid calling `clearCache(true)` unless you intentionally want to reset offline data. `clearCache(false)` clears only disk cache; `clearCache(true)` also clears DOM storage (localStorage, IndexedDB, CacheStorage/service workers).
+- If your PWA requires HTTP Basic auth or custom headers, note that `basicAuthCredential` and `source.headers` are not wired yet on Windows.
 
 ## Architecture notes
 

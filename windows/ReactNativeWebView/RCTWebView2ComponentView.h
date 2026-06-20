@@ -70,6 +70,21 @@ private:
     void HandleMessageFromJS(winrt::hstring const& message);
     void WriteCookiesToWebView2(std::string const& cookies);
 
+    void ApplySettings();
+    void ApplyUserAgent();
+    void ApplyProfileSettings();
+    void ApplyInjectedJavaScriptBeforeContentLoaded();
+    void RegisterMessagingBridge();
+    void InjectMessagingBridge();
+    std::string NavigationTypeToString(
+        winrt::Microsoft::Web::WebView2::Core::CoreWebView2NavigationKind kind) const noexcept;
+    void EmitLoadingError(
+        std::string const& url,
+        std::string const& domain,
+        int32_t code,
+        std::string const& description) noexcept;
+    void EmitHttpError(std::string const& url, int32_t statusCode) noexcept;
+
     winrt::weak_ref<winrt::Microsoft::ReactNative::Composition::ContentIslandComponentView> m_islandView;
     winrt::Microsoft::UI::Xaml::XamlIsland m_island{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::WebView2 m_webView{nullptr};
@@ -84,7 +99,7 @@ private:
     std::unordered_set<std::string> m_approvedUrls;
 
     // Event revokers
-    winrt::event_token m_messageToken;
+    winrt::Microsoft::Web::WebView2::Core::CoreWebView2::WebMessageReceived_revoker m_messageReceivedRevoker{};
     winrt::Microsoft::UI::Xaml::Controls::WebView2::NavigationStarting_revoker m_navigationStartingRevoker{};
     winrt::Microsoft::UI::Xaml::Controls::WebView2::NavigationCompleted_revoker m_navigationCompletedRevoker{};
     winrt::Microsoft::UI::Xaml::Controls::WebView2::CoreWebView2Initialized_revoker m_CoreWebView2InitializedRevoker{};
@@ -95,10 +110,19 @@ private:
 
     // Settings
     bool m_messagingEnabled{true};
+    bool m_messagingBridgeDocumentScriptAdded{false};
     bool m_linkHandlingEnabled{true};
+    bool m_javaScriptEnabled{true};
+    std::optional<bool> m_webviewDebuggingEnabled{};
     winrt::hstring m_injectedJavascript{L""};
+    winrt::hstring m_injectedJavascriptBeforeContentLoaded{L""};
+    std::string m_applicationNameForUserAgent{};
     winrt::hstring m_userAgent{L""};
+    winrt::hstring m_defaultUserAgent{L""};
+    bool m_cacheEnabled{true};
+    std::optional<bool> m_incognito{};
     std::string m_pendingHtml{};
+    bool m_ensureCoreWebView2Called{false};
 };
 
 void RegisterRCTWebView2ComponentView(
