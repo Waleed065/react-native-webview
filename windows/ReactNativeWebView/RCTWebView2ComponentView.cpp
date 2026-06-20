@@ -6,12 +6,22 @@
 #include "ReactWebViewHelpers.h"
 
 #include <winrt/Windows.System.h>
+#include <winrt/Windows.System.Threading.h>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.Web.Http.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Security.Cryptography.h>
+#include <chrono>
 #include <limits>
 #include <optional>
+
+// Verbose logging helper for WebView2 diagnostics.
+// Define RNCWEBVIEW2_FORCE_LOG before including this file (or below) to emit debug strings even in release.
+#if defined(_DEBUG) || defined(RNCWEBVIEW2_FORCE_LOG)
+#define WV2_LOG(msg) OutputDebugStringA((std::string("[RCTWebView2] ") + (msg) + "\n").c_str())
+#else
+#define WV2_LOG(msg) (void)0
+#endif
 
 namespace winrt::ReactNativeWebView::implementation {
 
@@ -100,6 +110,19 @@ void RCTWebView2ComponentView::UpdateProps(
     if (newProps->linkHandlingEnabled.has_value()) {
         m_linkHandlingEnabled = newProps->linkHandlingEnabled.value();
     }
+
+    // Track whether the consumer actually wants the async lock-based navigation flow.
+    m_hasOnShouldStartLoadWithRequestHandler = newProps->hasOnShouldStartLoadWithRequestHandler;
+
+    // Store and compile originWhitelist for native enforcement when the lock flow is off.
+    if (!newProps->originWhitelist.empty()) {
+        m_originWhitelist.assign(newProps->originWhitelist.begin(), newProps->originWhitelist.end());
+    } else {
+        // Default JS whitelist when nothing is provided.
+        m_originWhitelist = {"http://*", "https://*"};
+    }
+    m_compiledOriginWhitelist = CompileWhitelist(m_originWhitelist);
+    m_originWhitelistCompiled = true;
     
     // Apply injected JavaScript (runs at document end)
     if (newProps->injectedJavaScript.has_value()) {
@@ -167,11 +190,21 @@ void RCTWebView2ComponentView::UpdateProps(
     
     // Handle source navigation
     if (newProps->newSource.uri.has_value() && !newProps->newSource.uri.value().empty()) {
+        auto uriString = newProps->newSource.uri.value();
         try {
-            auto uri = winrt::Windows::Foundation::Uri(winrt::to_hstring(newProps->newSource.uri.value()));
-            m_webView.Source(uri);
+            auto uri = winrt::Windows::Foundation::Uri(winrt::to_hstring(uriString));
+            (void)uri; // validate only
+            if (m_webView.CoreWebView2()) {
+                // CoreWebView2 is ready: navigate directly and avoid the Source-property race.
+                WV2_LOG("UpdateProps: navigating to URI (CoreWebView2 ready): " + uriString);
+                m_webView.CoreWebView2().Navigate(winrt::to_hstring(uriString));
+            } else {
+                // Defer navigation until CoreWebView2 initialization completes.
+                WV2_LOG("UpdateProps: deferring URI navigation until init: " + uriString);
+                m_pendingUri = uriString;
+            }
         } catch (...) {
-            // Invalid URI
+            WV2_LOG("UpdateProps: invalid URI: " + uriString);
         }
     } else if (newProps->newSource.html.has_value() && !newProps->newSource.html.value().empty()) {
         if (m_webView.CoreWebView2()) {
@@ -248,30 +281,34 @@ void RCTWebView2ComponentView::RegisterCoreWebView2Events() {
 
 void RCTWebView2ComponentView::OnNavigationStarting(
     winrt::Microsoft::Web::WebView2::Core::CoreWebView2NavigationStartingEventArgs const& args) {
-    
+
     std::string url;
     try {
         url = winrt::to_string(args.Uri());
     } catch (...) {
         // If we cannot read the URI, cancel the navigation to be safe.
+        WV2_LOG("OnNavigationStarting: failed to read URI; cancelling");
         args.Cancel(true);
         return;
     }
 
+    WV2_LOG("OnNavigationStarting: " + url);
     auto navigationType = NavigationTypeToString(args.NavigationKind());
 
     // If this URL was already approved by JS (e.g. retry after shouldStartLoadWithRequest),
     // allow it without re-emitting the event.
     auto approvedIt = m_approvedUrls.find(url);
     if (approvedIt != m_approvedUrls.end()) {
+        WV2_LOG("OnNavigationStarting: URL was pre-approved, allowing");
         m_approvedUrls.erase(approvedIt);
-    } else {
+    } else if (m_hasOnShouldStartLoadWithRequestHandler) {
         auto eventEmitter = EventEmitter();
         if (!eventEmitter) {
             // Event bridge isn't ready yet; we can't ask JS, so allow the navigation.
-            // Subsequent navigations will go through the normal shouldStartLoadWithRequest flow.
+            WV2_LOG("OnNavigationStarting: no event emitter yet, allowing");
         } else {
             // Cancel the navigation and ask JS whether to proceed.
+            WV2_LOG("OnNavigationStarting: cancelling and asking JS");
             args.Cancel(true);
 
             double lockIdentifier = ++s_nextLockIdentifier;
@@ -299,8 +336,35 @@ void RCTWebView2ComponentView::OnNavigationStarting(
             event.navigationType = navigationType;
             event.isTopFrame = true; // NavigationStarting only fires for top-frame navigations
             eventEmitter->onShouldStartLoadWithRequest(event);
+
+            // Safety net: if JS never calls shouldStartLoadWithLockIdentifier, allow navigation after 5s.
+            try {
+                winrt::Windows::System::Threading::ThreadPoolTimer::CreateTimer(
+                    winrt::Windows::System::Threading::TimerElapsedHandler([lockIdentifier](winrt::Windows::System::Threading::ThreadPoolTimer const& timer) {
+                        (void)timer;
+                        WV2_LOG("OnNavigationStarting: auto-allowing pending lock after timeout: " + std::to_string(lockIdentifier));
+                        ReactNativeWebView::implementation::RCTWebView2ComponentView::ResolvePendingNavigation(lockIdentifier, true);
+                    }),
+                    std::chrono::seconds(5));
+            } catch (...) {
+                // Timer creation failure is non-fatal.
+            }
             return;
         }
+    } else {
+        // No JS handler requested: enforce originWhitelist natively and allow by default.
+        if (!PassesOriginWhitelist(url)) {
+            WV2_LOG("OnNavigationStarting: origin not in whitelist, cancelling: " + url);
+            args.Cancel(true);
+            try {
+                winrt::Windows::Foundation::Uri uri(winrt::to_hstring(url));
+                winrt::Windows::System::Launcher::LaunchUriAsync(uri);
+            } catch (...) {
+                // Ignore launcher failures.
+            }
+            return;
+        }
+        WV2_LOG("OnNavigationStarting: no JS handler, whitelist passed, allowing");
     }
 
     // Emit loadingStart for navigations that are allowed to proceed.
@@ -314,6 +378,7 @@ void RCTWebView2ComponentView::OnNavigationStarting(
             event.canGoForward = m_webView ? m_webView.CanGoForward() : false;
             event.navigationType = navigationType;
             eventEmitter->onLoadingStart(event);
+            WV2_LOG("OnNavigationStarting: emitted onLoadingStart");
         }
     } catch (...) {
         // Event dispatch failure is non-fatal
@@ -322,7 +387,8 @@ void RCTWebView2ComponentView::OnNavigationStarting(
 
 void RCTWebView2ComponentView::OnNavigationCompleted(
     winrt::Microsoft::Web::WebView2::Core::CoreWebView2NavigationCompletedEventArgs const& args) {
-    
+
+    WV2_LOG("OnNavigationCompleted");
     std::string url;
     if (m_webView && m_webView.Source()) {
         try {
@@ -363,9 +429,10 @@ void RCTWebView2ComponentView::OnNavigationCompleted(
 
 void RCTWebView2ComponentView::OnCoreWebView2Initialized(
     winrt::Microsoft::UI::Xaml::Controls::CoreWebView2InitializedEventArgs const& args) {
-    
+
+    WV2_LOG("OnCoreWebView2Initialized");
     if (!m_webView) return;
-    
+
     // If the WebView2 runtime failed to initialize, surface it as a loading error.
     auto initHr = args.Exception();
     if (initHr != S_OK) {
@@ -392,16 +459,9 @@ void RCTWebView2ComponentView::OnCoreWebView2Initialized(
     RegisterMessagingBridge();
     InjectMessagingBridge();
     ApplyInjectedJavaScriptBeforeContentLoaded();
-    
-    // Navigate to deferred HTML source if pending
-    if (!m_pendingHtml.empty()) {
-        try {
-            m_webView.NavigateToString(winrt::to_hstring(m_pendingHtml));
-        } catch (...) {
-            // Deferred navigation failed
-        }
-        m_pendingHtml.clear();
-    }
+
+    // Navigate to any deferred source (URI or HTML) now that CoreWebView2 is ready.
+    ProcessPendingSource();
 }
 
 void RCTWebView2ComponentView::OnCoreWebView2ResourceRequested(
@@ -519,9 +579,11 @@ void RCTWebView2ComponentView::WriteCookiesToWebView2(std::string const& cookies
 }
 
 void RCTWebView2ComponentView::ResolvePendingNavigation(double lockIdentifier, bool shouldStart) noexcept {
+    WV2_LOG("ResolvePendingNavigation: lock=" + std::to_string(lockIdentifier) + " shouldStart=" + (shouldStart ? "true" : "false"));
     try {
         auto it = s_pendingNavigations.find(lockIdentifier);
         if (it == s_pendingNavigations.end()) {
+            WV2_LOG("ResolvePendingNavigation: lock not found (already resolved or timed out)");
             return;
         }
 
@@ -530,6 +592,7 @@ void RCTWebView2ComponentView::ResolvePendingNavigation(double lockIdentifier, b
         s_pendingNavigations.erase(it);
 
         if (!shouldStart) {
+            WV2_LOG("ResolvePendingNavigation: JS rejected navigation");
             return;
         }
 
@@ -537,9 +600,13 @@ void RCTWebView2ComponentView::ResolvePendingNavigation(double lockIdentifier, b
             auto view = winrt::get_self<RCTWebView2ComponentView>(inspectable);
             view->m_approvedUrls.insert(url);
             view->NavigateToUrl(url);
+            WV2_LOG("ResolvePendingNavigation: retried navigation to " + url);
+        } else {
+            WV2_LOG("ResolvePendingNavigation: weak view expired");
         }
     } catch (...) {
         // Resolution failure is non-fatal
+        WV2_LOG("ResolvePendingNavigation: exception");
     }
 }
 
@@ -674,6 +741,104 @@ void RCTWebView2ComponentView::InjectMessagingBridge() {
     }
 }
 
+void RCTWebView2ComponentView::ProcessPendingSource() noexcept {
+    if (!m_webView || !m_webView.CoreWebView2()) {
+        return;
+    }
+
+    if (!m_pendingUri.empty()) {
+        auto uriString = m_pendingUri;
+        m_pendingUri.clear();
+        try {
+            WV2_LOG("ProcessPendingSource: navigating to deferred URI: " + uriString);
+            m_webView.CoreWebView2().Navigate(winrt::to_hstring(uriString));
+        } catch (...) {
+            WV2_LOG("ProcessPendingSource: deferred URI navigation failed");
+        }
+    }
+
+    if (!m_pendingHtml.empty()) {
+        auto html = m_pendingHtml;
+        m_pendingHtml.clear();
+        try {
+            WV2_LOG("ProcessPendingSource: navigating to deferred HTML");
+            m_webView.NavigateToString(winrt::to_hstring(html));
+        } catch (...) {
+            WV2_LOG("ProcessPendingSource: deferred HTML navigation failed");
+        }
+    }
+}
+
+std::string RCTWebView2ComponentView::ExtractOrigin(std::string const& url) noexcept {
+    // Match scheme://host[:port] (same regex used by the JS shared logic).
+    std::regex originRegex(R"(^[A-Za-z][A-Za-z0-9+\-.]+:(\/\/)?[^/]*))");
+    std::smatch match;
+    if (std::regex_search(url, match, originRegex)) {
+        return match.str(0);
+    }
+    return "";
+}
+
+std::vector<std::regex> RCTWebView2ComponentView::CompileWhitelist(std::vector<std::string> const& whitelist) noexcept {
+    std::vector<std::regex> result;
+    try {
+        // about:blank is always allowed, same as JS shared logic.
+        result.reserve(whitelist.size() + 1);
+        result.emplace_back("^about:blank$", std::regex::icase);
+        for (const auto& entry : whitelist) {
+            // Escape the literal pattern, then replace escaped * with .* to implement wildcards.
+            std::string escaped;
+            escaped.reserve(entry.size() * 2);
+            for (char c : entry) {
+                switch (c) {
+                    case '\\': escaped += "\\\\"; break;
+                    case '.': escaped += "\\."; break;
+                    case '*': escaped += ".*"; break;
+                    case '+': escaped += "\\+"; break;
+                    case '?': escaped += "\\?"; break;
+                    case '^': escaped += "\\^"; break;
+                    case '$': escaped += "\\$"; break;
+                    case '|': escaped += "\\|"; break;
+                    case '(': escaped += "\\("; break;
+                    case ')': escaped += "\\)"; break;
+                    case '[': escaped += "\\["; break;
+                    case ']': escaped += "\\]"; break;
+                    case '{': escaped += "\\{"; break;
+                    case '}': escaped += "\\}"; break;
+                    default: escaped += c; break;
+                }
+            }
+            result.emplace_back("^" + escaped + "$", std::regex::icase);
+        }
+    } catch (...) {
+        // If compilation fails, fall back to allowing http/https.
+        result.clear();
+        result.emplace_back("^http://.*$", std::regex::icase);
+        result.emplace_back("^https://.*$", std::regex::icase);
+    }
+    return result;
+}
+
+bool RCTWebView2ComponentView::PassesOriginWhitelist(std::string const& url) const noexcept {
+    if (!m_originWhitelistCompiled || m_compiledOriginWhitelist.empty()) {
+        return true;
+    }
+    auto origin = ExtractOrigin(url);
+    if (origin.empty()) {
+        return false;
+    }
+    for (const auto& re : m_compiledOriginWhitelist) {
+        try {
+            if (std::regex_match(origin, re)) {
+                return true;
+            }
+        } catch (...) {
+            continue;
+        }
+    }
+    return false;
+}
+
 std::string RCTWebView2ComponentView::NavigationTypeToString(
     winrt::Microsoft::Web::WebView2::Core::CoreWebView2NavigationKind kind) const noexcept {
     using NavigationKind = winrt::Microsoft::Web::WebView2::Core::CoreWebView2NavigationKind;
@@ -693,6 +858,7 @@ void RCTWebView2ComponentView::EmitLoadingError(
     std::string const& domain,
     int32_t code,
     std::string const& description) noexcept {
+    WV2_LOG("EmitLoadingError: domain=" + domain + " code=" + std::to_string(code) + " desc=" + description + " url=" + url);
     try {
         if (auto eventEmitter = EventEmitter()) {
             RNCWebViewCodegen::RCTWebView2EventEmitter::OnLoadingError event;
@@ -712,6 +878,7 @@ void RCTWebView2ComponentView::EmitLoadingError(
 }
 
 void RCTWebView2ComponentView::EmitHttpError(std::string const& url, int32_t statusCode) noexcept {
+    WV2_LOG("EmitHttpError: code=" + std::to_string(statusCode) + " url=" + url);
     try {
         if (auto eventEmitter = EventEmitter()) {
             RNCWebViewCodegen::RCTWebView2EventEmitter::OnHttpError event;

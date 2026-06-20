@@ -136,6 +136,20 @@ export interface NativeProps extends ViewProps {
   linkHandlingEnabled?: boolean;
 
   /**
+   * Set to true when the consumer provides an onShouldStartLoadWithRequest handler.
+   * When false, navigation is allowed by default and originWhitelist is enforced natively.
+   * @platform windows
+   */
+  hasOnShouldStartLoadWithRequestHandler?: boolean;
+
+  /**
+   * List of origin regex patterns used to allow/forbid navigation natively when the JS
+   * lock flow is not active. Defaults to allowing http/https origins.
+   * @platform windows
+   */
+  originWhitelist?: ReadonlyArray<string>;
+
+  /**
    * Function that is invoked when the `WebView` should open a new window.
    * This happens when the JS calls `window.open('http://someurl', '_blank')`
    * or when the user clicks on a `<a href="http://someurl" target="_blank">` link.
@@ -281,6 +295,8 @@ const RCTWebView2 = getNativeComponent<NativeProps>('RCTWebView2', () => ({
   validAttributes: {
     testID: true,
     linkHandlingEnabled: true,
+    hasOnShouldStartLoadWithRequestHandler: true,
+    originWhitelist: true,
     cacheEnabled: true,
     incognito: true,
     injectedJavaScript: true,

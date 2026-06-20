@@ -7,6 +7,9 @@
 
 #include "codegen_manual/react/components/RNCWebViewSpec/RCTWebView2.g.h"
 
+#include <regex>
+#include <vector>
+
 #include <winrt/Microsoft.ReactNative.h>
 #include <winrt/Microsoft.ReactNative.Composition.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
@@ -70,6 +73,11 @@ private:
     void HandleMessageFromJS(winrt::hstring const& message);
     void WriteCookiesToWebView2(std::string const& cookies);
 
+    bool PassesOriginWhitelist(std::string const& url) const noexcept;
+    void ProcessPendingSource() noexcept;
+    static std::string ExtractOrigin(std::string const& url) noexcept;
+    static std::vector<std::regex> CompileWhitelist(std::vector<std::string> const& whitelist) noexcept;
+
     void ApplySettings();
     void ApplyUserAgent();
     void ApplyProfileSettings();
@@ -122,7 +130,12 @@ private:
     bool m_cacheEnabled{true};
     std::optional<bool> m_incognito{};
     std::string m_pendingHtml{};
+    std::string m_pendingUri{};
     bool m_ensureCoreWebView2Called{false};
+    bool m_hasOnShouldStartLoadWithRequestHandler{false};
+    std::vector<std::string> m_originWhitelist{};
+    std::vector<std::regex> m_compiledOriginWhitelist{};
+    bool m_originWhitelistCompiled{false};
 };
 
 void RegisterRCTWebView2ComponentView(

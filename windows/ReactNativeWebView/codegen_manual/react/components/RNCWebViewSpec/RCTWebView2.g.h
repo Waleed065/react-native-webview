@@ -50,6 +50,8 @@ struct RCTWebView2Props : winrt::implements<RCTWebView2Props, winrt::Microsoft::
        auto cloneFromProps = cloneFrom.as<RCTWebView2Props>();
        testID = cloneFromProps->testID;
        linkHandlingEnabled = cloneFromProps->linkHandlingEnabled;
+       hasOnShouldStartLoadWithRequestHandler = cloneFromProps->hasOnShouldStartLoadWithRequestHandler;
+       originWhitelist = cloneFromProps->originWhitelist;
        cacheEnabled = cloneFromProps->cacheEnabled;
        incognito = cloneFromProps->incognito;
        injectedJavaScript = cloneFromProps->injectedJavaScript;
@@ -80,6 +82,12 @@ struct RCTWebView2Props : winrt::implements<RCTWebView2Props, winrt::Microsoft::
 
   REACT_FIELD(linkHandlingEnabled)
   std::optional<bool> linkHandlingEnabled{};
+
+  REACT_FIELD(hasOnShouldStartLoadWithRequestHandler)
+  bool hasOnShouldStartLoadWithRequestHandler{};
+
+  REACT_FIELD(originWhitelist)
+  std::vector<std::string> originWhitelist;
 
   REACT_FIELD(cacheEnabled)
   bool cacheEnabled{true};

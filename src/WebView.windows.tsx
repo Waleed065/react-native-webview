@@ -205,6 +205,10 @@ const WebViewComponent = forwardRef<{}, WindowsWebViewProps>(
         {...otherProps}
         messagingEnabled={typeof onMessageProp === 'function'}
         linkHandlingEnabled={typeof onOpenWindowProp === 'function'}
+        hasOnShouldStartLoadWithRequestHandler={
+          typeof onShouldStartLoadWithRequestProp === 'function'
+        }
+        originWhitelist={originWhitelist}
         onLoadingError={onLoadingError}
         onLoadingFinish={onLoadingFinish}
         onLoadingProgress={onLoadingProgress}
