@@ -74,8 +74,8 @@ private:
     winrt::Microsoft::UI::Xaml::XamlIsland m_island{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::WebView2 m_webView{nullptr};
 
-    // Pending onShouldStartLoadWithRequest decisions: lockIdentifier -> (weak component view, url)
-    static std::unordered_map<double, std::pair<winrt::weak_ref<RCTWebView2ComponentView>, std::string>> s_pendingNavigations;
+    // Pending onShouldStartLoadWithRequest decisions: lockIdentifier -> (weak IInspectable, url)
+    static std::unordered_map<double, std::pair<winrt::weak_ref<winrt::IInspectable>, std::string>> s_pendingNavigations;
     static double s_nextLockIdentifier;
 
     // URLs that have been approved by JS and should be allowed without asking again.

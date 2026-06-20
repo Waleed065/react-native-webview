@@ -233,7 +233,7 @@ void RCTWebView2ComponentView::OnNavigationStarting(
             args.Cancel(true);
 
             double lockIdentifier = ++s_nextLockIdentifier;
-            s_pendingNavigations[lockIdentifier] = {winrt::make_weak(*this), url};
+            s_pendingNavigations[lockIdentifier] = {winrt::make_weak(this->as<winrt::IInspectable>()), url};
 
             // Defensive cap to prevent unbounded growth if JS never responds.
             constexpr size_t maxPendingNavigations = 32;
@@ -487,7 +487,8 @@ void RCTWebView2ComponentView::ResolvePendingNavigation(double lockIdentifier, b
             return;
         }
 
-        if (auto view = weakView.get()) {
+        if (auto inspectable = weakView.get()) {
+            auto view = winrt::get_self<RCTWebView2ComponentView>(inspectable);
             view->m_approvedUrls.insert(url);
             view->NavigateToUrl(url);
         }
